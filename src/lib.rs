@@ -33,7 +33,7 @@ pub enum TokenType {
     Colon,       // :
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JsonValue {
     Object(HashMap<String, JsonValue>),
     SString(String),
