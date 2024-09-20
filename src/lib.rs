@@ -36,7 +36,7 @@ pub enum TokenType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonValue {
     Object(HashMap<String, JsonValue>),
-    SString(String),
+    JString(String),
     Array(Vec<JsonValue>),
     Boolean(bool),
     Number(f64),

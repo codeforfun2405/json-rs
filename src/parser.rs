@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use crate::{errors::JsonError, JsonValue, Token, TokenType};
 use anyhow::Result;
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Parser {
@@ -16,33 +17,39 @@ impl Parser {
         }
     }
 
+    // parse tokens into JsonValue
+    // there are 2 cases
+    // first: the json is a json object: {}
+    // second: the json is an array: []
     pub fn parse(&mut self) -> Result<JsonValue> {
-        let tk = self.advance();
-        match tk {
-            Some(&Token::ObjectStart) => Ok(self.parse_objct()?),
-            Some(&Token::ArrayStart) => Ok(self.parse_array()?),
-            _ => Err(JsonError::InvalidJson)?,
+        if let Some(cur_tk) = self.advance() {
+            match cur_tk {
+                Token::ObjectStart => Ok(self.parse_object()?),
+                Token::ArrayStart => Ok(self.parse_array()?),
+                _ => Err(JsonError::InvalidJson)?,
+            }
+        } else {
+            Err(JsonError::InvalidJson)?
         }
     }
 
-    // object: {}
-    fn parse_objct(&mut self) -> Result<JsonValue> {
-        let mut result: HashMap<String, JsonValue> = HashMap::new();
+    // object: {"key": JsonValue, "key1": JsonValue}
+    fn parse_object(&mut self) -> Result<JsonValue> {
+        // parse every key-value parir utill meet ObjectEnd: }
+        let mut object = HashMap::new();
 
-        loop {
-            if self.is_end() || self.tokens[self.current] == Token::ObjectEnd {
+        while let Some(tk) = self.peek() {
+            if tk == &Token::ObjectEnd {
                 break;
             }
 
-            let key = self.consume_key()?;
-            println!("[parse_objct] consume key: {}", key);
-            self.consume(TokenType::Colon)?;
+            let key = self.consume(TokenType::String)?; // consume key
+            self.consume(TokenType::Colon)?; // consume :
 
-            let value = self.parse_value()?;
-            println!("[parse_objct] parsed value: {:?}", value);
+            let value = self.parse_value()?; // parse json value
+            object.insert(Self::token_to_string(key)?, value);
 
-            result.insert(key, value);
-
+            // consume comma between key-value pair if not meet ObjectEnd
             if let Some(v) = self.peek() {
                 if v != &Token::ObjectEnd {
                     self.consume(TokenType::Comma)?;
@@ -51,127 +58,133 @@ impl Parser {
         }
 
         self.consume(TokenType::ObjectEnd)?;
-
-        Ok(JsonValue::Object(result))
+        Ok(JsonValue::Object(object))
     }
 
-    fn parse_array(&mut self) -> Result<JsonValue> {
-        println!("[parse_array] start parse array, current: {}", self.current);
+    fn token_to_string(tk: Token) -> Result<String> {
+        if let Token::String(v) = tk {
+            Ok(v.clone())
+        } else {
+            Err(JsonError::ExpectedString)?
+        }
+    }
 
-        let mut arr: Vec<JsonValue> = Vec::new();
-        while let Some(v) = self.peek() {
-            if v == &Token::ArrayEnd {
+    // parse array: [JsonValue, JsonValue]
+    fn parse_array(&mut self) -> Result<JsonValue> {
+        let mut array = Vec::new();
+
+        while let Some(tk) = self.peek() {
+            if tk == &Token::ArrayEnd {
                 break;
             }
 
-            println!(
-                "[parse_array] start parse_value: {}",
-                self.tokens[self.current]
-            );
+            let value = self.parse_value()?;
+            array.push(value);
 
-            let arr_element = self.parse_value()?;
-            println!("[parse_array] add {:?} to array", arr_element);
-
-            arr.push(arr_element);
-
-            println!("[parse_array] next token: {:?}", self.peek());
-
-            // if the array is not end, need consume the comma between elements
-            if let Some(t) = self.peek() {
-                if t != &Token::ArrayEnd {
+            // consume comma between elements if not meet ArrayEnd
+            if let Some(v) = self.peek() {
+                if v != &Token::ArrayEnd {
                     self.consume(TokenType::Comma)?;
                 }
             }
         }
 
-        println!("consume array end...");
         self.consume(TokenType::ArrayEnd)?;
-        Ok(JsonValue::Array(arr))
+        Ok(JsonValue::Array(array))
     }
 
+    // parse token into JsonValue
+    // if current token is { => parse object
+    // if current token is [ => parse array
+    // if current token is String => return JsonValue::JString
+    // if current token is Number => return JsonValue::Number
+    // if current token is Bool => return JsonValue::Boolean
+    // if current token is null => return JsonValue::Null
     fn parse_value(&mut self) -> Result<JsonValue> {
-        let tk = self.advance();
-        if tk.is_none() {
-            return Err(JsonError::InvalidJson)?;
-        }
-
-        let cur_tk = tk.unwrap();
-
-        match cur_tk {
-            Token::ObjectStart => Ok(self.parse_objct()?),
-            Token::ArrayStart => Ok(self.parse_array()?),
-            Token::String(v) => Ok(JsonValue::SString(v.clone())),
-            Token::Number(v) => Ok(JsonValue::Number(*v)),
-            Token::Bool(v) => Ok(JsonValue::Boolean(*v)),
-            Token::Null => Ok(JsonValue::Null),
-            _ => Err(JsonError::InvalidJson)?,
-        }
-    }
-
-    fn consume_key(&mut self) -> Result<String> {
-        if let Token::String(v) = self.consume(TokenType::String)? {
-            return Ok(v);
-        }
-
-        Err(JsonError::ExpectedString)?
-    }
-
-    fn consume(&mut self, tk_type: TokenType) -> Result<Token> {
-        if let Some(v) = self.advance() {
-            match tk_type {
-                TokenType::String => {
-                    if let Token::String(v) = v {
-                        Ok(Token::String(v.clone()))
-                    } else {
-                        Err(JsonError::ExpectToken("String".to_string(), v.to_string()))?
-                    }
-                }
-                TokenType::Number => {
-                    if let Token::Number(v) = *v {
-                        Ok(Token::Number(v))
-                    } else {
-                        Err(JsonError::ExpectToken("Number".to_string(), v.to_string()))?
-                    }
-                }
-                TokenType::ObjectStart => {
-                    if Token::ObjectStart == *v {
-                        Ok(Token::ObjectStart)
-                    } else {
-                        Err(JsonError::ExpectToken("{".to_string(), v.to_string()))?
-                    }
-                }
-                TokenType::ObjectEnd => {
-                    if Token::ObjectEnd == *v {
-                        Ok(Token::ObjectEnd)
-                    } else {
-                        Err(JsonError::ExpectToken("}".to_string(), v.to_string()))?
-                    }
-                }
-                TokenType::ArrayEnd => {
-                    if Token::ArrayEnd == *v {
-                        Ok(Token::ArrayEnd)
-                    } else {
-                        Err(JsonError::ExpectToken("]".to_string(), v.to_string()))?
-                    }
-                }
-                TokenType::Colon => {
-                    if Token::Colon == *v {
-                        Ok(Token::Colon)
-                    } else {
-                        Err(JsonError::ExpectToken(":".to_string(), v.to_string()))?
-                    }
-                }
-                TokenType::Comma => {
-                    if Token::Comma == *v {
-                        Ok(Token::Comma)
-                    } else {
-                        Err(JsonError::ExpectToken(",".to_string(), v.to_string()))?
-                    }
-                }
+        if let Some(tk) = self.advance() {
+            match tk {
+                Token::String(v) => Ok(JsonValue::JString(v.clone())),
+                Token::Number(v) => Ok(JsonValue::Number(*v)),
+                Token::Bool(v) => Ok(JsonValue::Boolean(*v)),
+                Token::Null => Ok(JsonValue::Null),
+                Token::ObjectStart => Ok(self.parse_object()?),
+                Token::ArrayStart => Ok(self.parse_array()?),
                 _ => Err(JsonError::InvalidJson)?,
             }
         } else {
             Err(JsonError::InvalidJson)?
+        }
+    }
+
+    // check if the current token is same token type with `tk_type`
+    // advance the current index and return the token in current index
+    fn consume(&mut self, tk_type: TokenType) -> Result<Token> {
+        if let Some(cur_tk) = self.advance() {
+            match tk_type {
+                TokenType::String => Self::consume_string(cur_tk),
+                TokenType::Number => Self::consume_number(cur_tk),
+                TokenType::ObjectEnd => Self::consume_object_end(cur_tk),
+                TokenType::ArrayEnd => Self::consume_array_end(cur_tk),
+                TokenType::Colon => Self::consume_colon(cur_tk),
+                TokenType::Comma => Self::consume_comma(cur_tk),
+                _ => Err(JsonError::InvalidJson)?,
+            }
+        } else {
+            Err(JsonError::InvalidJson)?
+        }
+    }
+
+    fn consume_string(cur_tk: &Token) -> Result<Token> {
+        if let Token::String(_) = cur_tk {
+            Ok(cur_tk.clone())
+        } else {
+            Err(JsonError::ExpectToken(
+                "String".to_string(),
+                cur_tk.to_string(),
+            ))?
+        }
+    }
+
+    fn consume_number(cur_tk: &Token) -> Result<Token> {
+        if let Token::Number(_) = cur_tk {
+            Ok(cur_tk.clone())
+        } else {
+            Err(JsonError::ExpectToken(
+                "Number".to_string(),
+                cur_tk.to_string(),
+            ))?
+        }
+    }
+
+    fn consume_object_end(cur_tk: &Token) -> Result<Token> {
+        if let Token::ObjectEnd = cur_tk {
+            Ok(cur_tk.clone())
+        } else {
+            Err(JsonError::ExpectToken("}".to_string(), cur_tk.to_string()))?
+        }
+    }
+
+    fn consume_array_end(cur_tk: &Token) -> Result<Token> {
+        if let Token::ArrayEnd = cur_tk {
+            Ok(cur_tk.clone())
+        } else {
+            Err(JsonError::ExpectToken("]".to_string(), cur_tk.to_string()))?
+        }
+    }
+
+    fn consume_colon(cur_tk: &Token) -> Result<Token> {
+        if let Token::Colon = cur_tk {
+            Ok(cur_tk.clone())
+        } else {
+            Err(JsonError::ExpectToken(":".to_string(), cur_tk.to_string()))?
+        }
+    }
+
+    fn consume_comma(cur_tk: &Token) -> Result<Token> {
+        if let Token::Comma = cur_tk {
+            Ok(cur_tk.clone())
+        } else {
+            Err(JsonError::ExpectToken(",".to_string(), cur_tk.to_string()))?
         }
     }
 
@@ -199,6 +212,8 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::scanner;
 
     use super::*;
@@ -213,13 +228,13 @@ mod tests {
         let json_value = parser.parse()?;
 
         let mut expect_object = HashMap::new();
-        expect_object.insert("name".to_string(), JsonValue::SString("Alex".to_string()));
+        expect_object.insert("name".to_string(), JsonValue::JString("Alex".to_string()));
         expect_object.insert("age".to_string(), JsonValue::Number(28 as f64));
         expect_object.insert(
             "Loc".to_string(),
             JsonValue::Object(HashMap::from_iter([(
                 "city".to_string(),
-                JsonValue::SString("New York".to_string()),
+                JsonValue::JString("New York".to_string()),
             )])),
         );
 
@@ -229,29 +244,54 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_array() -> anyhow::Result<()> {
-        /*
-        tokens: [ObjectStart, String("city_list"), Colon, ArrayStart, ObjectStart, String("name"), Colon, String("A"), Comma, String("population"), Colon, Number(1000.0), ObjectEnd, Comma, ObjectStart, String("name"), Colon, String("B"), Comma, String("population"), Colon, Number(30000.0), ObjectEnd, ArrayEnd, ObjectEnd]
-        [parse_objct] consume key: city_list
-        [parse_array] start parse array, current: 4
-        [parse_array] start parse_value: {
-        [parse_objct] consume key: name
-        [parse_objct] parsed value: SString("A")
-        [parse_objct] consume key: population
-        [parse_objct] parsed value: Number(1000.0)
-        [parse_array] add Object({"name": SString("A"), "population": Number(1000.0)}) to array
-        [parse_array] next token: Some(Comma)
-        [parse_array] start parse_value: {
-        [parse_objct] consume key: name
-        [parse_objct] parsed value: SString("B")
-        [parse_objct] consume key: population
-        [parse_objct] parsed value: Number(30000.0)
-        [parse_array] add Object({"population": Number(30000.0), "name": SString("B")}) to array
-        [parse_array] next token: Some(ArrayEnd)
-        consume array end...
-        [parse_objct] parsed value: Array([Object({"name": SString("A"), "population": Number(1000.0)}), Object({"population": Number(30000.0), "name": SString("B")})])
+    fn test_parse_simple_array() -> anyhow::Result<()> {
+        let json = r#"[1, 2, 3, "A", "Hello", "Good Night"]"#;
+        let mut json_scanner = scanner::Scanner::new(json.to_string());
+        let tokens = json_scanner.scan()?;
 
-        */
+        println!("tokens: {:?}", tokens);
+
+        let mut parser = Parser::new(tokens);
+        let json_value = parser.parse()?;
+        assert_eq!(
+            JsonValue::Array(vec![
+                JsonValue::Number(1 as f64),
+                JsonValue::Number(2 as f64),
+                JsonValue::Number(3 as f64),
+                JsonValue::JString("A".to_string()),
+                JsonValue::JString("Hello".to_string()),
+                JsonValue::JString("Good Night".to_string()),
+            ]),
+            json_value
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_simple_object() -> anyhow::Result<()> {
+        let json = r#"{"key1": "Test1", "key2": "Awesome"}"#;
+        let mut json_scanner = scanner::Scanner::new(json.to_string());
+        let tokens = json_scanner.scan()?;
+
+        println!("tokens: {:?}", tokens);
+
+        let mut parser = Parser::new(tokens);
+        let json_value = parser.parse()?;
+        assert_eq!(
+            JsonValue::Object(HashMap::from_iter([
+                ("key1".to_string(), JsonValue::JString("Test1".to_string())),
+                (
+                    "key2".to_string(),
+                    JsonValue::JString("Awesome".to_string())
+                )
+            ])),
+            json_value
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_array() -> anyhow::Result<()> {
         let json = r#"{"city_list":[{"name":"A", "population": 1000}, {"name":"B", "population": 30000}]}"#;
         let mut json_scanner = scanner::Scanner::new(json.to_string());
         let tokens = json_scanner.scan()?;
@@ -266,11 +306,11 @@ mod tests {
             "city_list".to_string(),
             JsonValue::Array(vec![
                 JsonValue::Object(HashMap::from_iter([
-                    ("name".to_string(), JsonValue::SString("A".to_string())),
+                    ("name".to_string(), JsonValue::JString("A".to_string())),
                     ("population".to_string(), JsonValue::Number(1000 as f64)),
                 ])),
                 JsonValue::Object(HashMap::from_iter([
-                    ("name".to_string(), JsonValue::SString("B".to_string())),
+                    ("name".to_string(), JsonValue::JString("B".to_string())),
                     ("population".to_string(), JsonValue::Number(30000 as f64)),
                 ])),
             ]),
