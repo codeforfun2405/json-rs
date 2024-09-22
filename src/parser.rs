@@ -62,10 +62,9 @@ impl Parser {
     }
 
     fn token_to_string(tk: Token) -> Result<String> {
-        if let Token::String(v) = tk {
-            Ok(v.clone())
-        } else {
-            Err(JsonError::ExpectedString)?
+        match tk {
+            Token::String(v) => Ok(v.clone()),
+            _ => Err(JsonError::ExpectedString)?,
         }
     }
 
